@@ -17,8 +17,21 @@ import logging
 from typing import List, Optional
 from pathlib import Path
 
+import numpy as np
 from fastrtc import AdditionalOutputs, audio_to_float32
 from scipy.signal import resample
+
+PITCH_SHIFT_SEMITONES = float(os.getenv("PITCH_SHIFT_SEMITONES", "0"))
+
+def pitch_shift_simple(audio: np.ndarray, semitones: float, sr: int) -> np.ndarray:
+    """Fast pitch shift using resampling (changes pitch without changing duration)."""
+    if semitones == 0:
+        return audio
+    factor = 2 ** (semitones / 12.0)
+    # Resample to change pitch
+    stretched = resample(audio, int(len(audio) / factor))
+    # Resample back to original length to maintain duration
+    return resample(stretched, len(audio))
 
 from reachy_mini import ReachyMini
 from reachy_mini.media.media_manager import MediaBackend
@@ -493,6 +506,10 @@ class LocalStream:
                         audio_frame,
                         int(len(audio_frame) * output_sample_rate / input_sample_rate),
                     )
+
+                # Pitch shift for cartoonish voice
+                if PITCH_SHIFT_SEMITONES != 0:
+                    audio_frame = pitch_shift_simple(audio_frame, PITCH_SHIFT_SEMITONES, output_sample_rate)
 
                 self._robot.media.push_audio_sample(audio_frame)
 
