@@ -21,17 +21,24 @@ import numpy as np
 from fastrtc import AdditionalOutputs, audio_to_float32
 from scipy.signal import resample
 
-PITCH_SHIFT_SEMITONES = float(os.getenv("PITCH_SHIFT_SEMITONES", "0"))
+PITCH_SHIFT_SEMITONES = float(os.getenv("PITCH_SHIFT_SEMITONES", "5"))
 
 def pitch_shift_simple(audio: np.ndarray, semitones: float, sr: int) -> np.ndarray:
-    """Fast pitch shift using resampling (changes pitch without changing duration)."""
+    """Pitch shift preserving duration using librosa with optimized settings."""
     if semitones == 0:
         return audio
-    factor = 2 ** (semitones / 12.0)
-    # Resample to change pitch
-    stretched = resample(audio, int(len(audio) / factor))
-    # Resample back to original length to maintain duration
-    return resample(stretched, len(audio))
+
+    import librosa
+
+    flat_audio = audio.flatten().astype(np.float32)
+    # Use smaller n_fft for small audio chunks, and res_type='linear' for speed
+    n_fft = min(512, len(flat_audio))
+    if n_fft < 16:
+        return audio  # Too small to process
+    shifted = librosa.effects.pitch_shift(
+        flat_audio, sr=sr, n_steps=semitones, n_fft=n_fft, res_type="linear"
+    )
+    return shifted.astype(audio.dtype)
 
 from reachy_mini import ReachyMini
 from reachy_mini.media.media_manager import MediaBackend
@@ -55,6 +62,7 @@ except Exception:  # pragma: no cover - only loaded when settings_app is used
 
 
 logger = logging.getLogger(__name__)
+print(f"🔵 console.py loaded with pitch shift = {PITCH_SHIFT_SEMITONES} semitones")
 
 
 class LocalStream:
@@ -485,6 +493,7 @@ class LocalStream:
                         )
 
             elif isinstance(handler_output, tuple):
+                logger.debug(f"Received audio tuple, processing...")
                 input_sample_rate, audio_data = handler_output
                 output_sample_rate = self._robot.media.get_output_audio_samplerate()
 
@@ -508,9 +517,13 @@ class LocalStream:
                     )
 
                 # Pitch shift for cartoonish voice
-                if PITCH_SHIFT_SEMITONES != 0:
-                    audio_frame = pitch_shift_simple(audio_frame, PITCH_SHIFT_SEMITONES, output_sample_rate)
-
+                pitch_semitones = float(os.getenv("PITCH_SHIFT_SEMITONES", "0"))
+                if pitch_semitones != 0:
+                    logger.info(f"Applying pitch shift: {pitch_semitones} semitones")
+                    audio_frame = pitch_shift_simple(audio_frame, pitch_semitones, output_sample_rate)
+                else:
+                    logger.info("No pitch shift applied")
+                    
                 self._robot.media.push_audio_sample(audio_frame)
 
             else:

@@ -50,6 +50,8 @@ def run(
     from reachy_mini_conversation_app.audio.head_wobbler import HeadWobbler
 
     logger = setup_logger(args.debug)
+    import os
+    logger.info(f"🟦 PITCH_SHIFT_SEMITONES={os.getenv('PITCH_SHIFT_SEMITONES', '0')}")
     logger.info("Starting Reachy Mini Conversation App")
 
     if args.no_camera and args.head_tracker is not None:
