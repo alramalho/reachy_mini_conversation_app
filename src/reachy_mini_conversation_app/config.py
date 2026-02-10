@@ -49,6 +49,9 @@ class Config:
 
     logger.debug(f"Model: {MODEL_NAME}, HF_HOME: {HF_HOME}, Vision Model: {LOCAL_VISION_MODEL}")
 
+    PORCUPINE_SECRET_KEY_HI = os.getenv("PORCUPINE_SECRET_KEY_HI")
+    PORCUPINE_SECRET_KEY_STOP = os.getenv("PORCUPINE_SECRET_KEY_STOP")
+
     REACHY_MINI_CUSTOM_PROFILE = LOCKED_PROFILE or os.getenv("REACHY_MINI_CUSTOM_PROFILE")
     logger.debug(f"Custom Profile: {REACHY_MINI_CUSTOM_PROFILE}")
 

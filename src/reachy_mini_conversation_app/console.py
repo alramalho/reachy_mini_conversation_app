@@ -12,6 +12,7 @@ app instance's ``.env`` file (if available) and proceed to start streaming.
 import os
 import sys
 import time
+import enum
 import asyncio
 import logging
 from typing import List, Optional
@@ -63,6 +64,11 @@ except Exception:  # pragma: no cover - only loaded when settings_app is used
 
 logger = logging.getLogger(__name__)
 print(f"🔵 console.py loaded with pitch shift = {PITCH_SHIFT_SEMITONES} semitones")
+
+
+class _WakeWordState(enum.Enum):
+    WAITING = "waiting"
+    ACTIVE = "active"
 
 
 class LocalStream:
@@ -466,16 +472,116 @@ class LocalStream:
             self._robot.media.audio.clear_output_buffer()
         self.handler.output_queue = asyncio.Queue()
 
+    def _init_porcupine(self):
+        """Initialize Porcupine wake word engines if keys are configured."""
+        if not config.PORCUPINE_SECRET_KEY_HI or not config.PORCUPINE_SECRET_KEY_STOP:
+            logger.info("Porcupine keys not set, wake word detection disabled (always active)")
+            return None, None
+
+        import pvporcupine
+
+        assets_dir = Path(__file__).parent / "assets"
+        hi_path = assets_dir / "hey_reachy.ppn"
+        stop_path = assets_dir / "reachy_stop.ppn"
+
+        if not hi_path.exists() or not stop_path.exists():
+            logger.warning("Porcupine .ppn files not found in %s, wake word disabled", assets_dir)
+            return None, None
+
+        porcupine_hi = pvporcupine.create(
+            access_key=config.PORCUPINE_SECRET_KEY_HI,
+            keyword_paths=[str(hi_path)],
+        )
+        porcupine_stop = pvporcupine.create(
+            access_key=config.PORCUPINE_SECRET_KEY_STOP,
+            keyword_paths=[str(stop_path)],
+        )
+        logger.info("Porcupine wake word detection enabled (frame_length=%d)", porcupine_hi.frame_length)
+        return porcupine_hi, porcupine_stop
+
     async def record_loop(self) -> None:
         """Read mic frames from the recorder and forward them to the handler."""
         input_sample_rate = self._robot.media.get_input_audio_samplerate()
         logger.debug(f"Audio recording started at {input_sample_rate} Hz")
 
-        while not self._stop_event.is_set():
-            audio_frame = self._robot.media.get_audio_sample()
-            if audio_frame is not None:
-                await self.handler.receive((input_sample_rate, audio_frame))
-            await asyncio.sleep(0)  # avoid busy loop
+        porcupine_hi, porcupine_stop = self._init_porcupine()
+        wake_word_enabled = porcupine_hi is not None and porcupine_stop is not None
+
+        if wake_word_enabled:
+            state = _WakeWordState.WAITING
+            pv_sample_rate = porcupine_hi.sample_rate  # 16000
+            pv_frame_length = porcupine_hi.frame_length  # 512
+            pv_buffer = np.array([], dtype=np.int16)
+            logger.info("Wake word: starting in WAITING state")
+        else:
+            logger.info("Wake word disabled, starting in ACTIVE state")
+            state = _WakeWordState.ACTIVE
+
+        try:
+            while not self._stop_event.is_set():
+                audio_frame = self._robot.media.get_audio_sample()
+                if audio_frame is None:
+                    await asyncio.sleep(0)
+                    continue
+
+                if wake_word_enabled:
+                    # Prepare audio for Porcupine: mono int16 at 16kHz
+                    pv_audio = audio_frame.copy()
+                    if pv_audio.ndim == 2:
+                        pv_audio = pv_audio[:, 0] if pv_audio.shape[1] <= pv_audio.shape[0] else pv_audio[0, :]
+                    # Convert to int16 if float
+                    if np.issubdtype(pv_audio.dtype, np.floating):
+                        pv_audio = (pv_audio * 32767).clip(-32768, 32767).astype(np.int16)
+                    elif pv_audio.dtype != np.int16:
+                        pv_audio = pv_audio.astype(np.int16)
+                    # Resample to Porcupine's expected rate
+                    if input_sample_rate != pv_sample_rate:
+                        num_samples = int(len(pv_audio) * pv_sample_rate / input_sample_rate)
+                        if num_samples > 0:
+                            pv_audio = resample(pv_audio.astype(np.float64), num_samples).astype(np.int16)
+                    # Accumulate into buffer and process in frame_length chunks
+                    pv_buffer = np.concatenate([pv_buffer, pv_audio])
+                    while len(pv_buffer) >= pv_frame_length:
+                        chunk = pv_buffer[:pv_frame_length]
+                        pv_buffer = pv_buffer[pv_frame_length:]
+
+                        if state == _WakeWordState.WAITING:
+                            keyword_index = porcupine_hi.process(chunk)
+                            if keyword_index >= 0:
+                                logger.info("Wake word 'Hey Reachy' detected! Switching to ACTIVE")
+                                state = _WakeWordState.ACTIVE
+                                try:
+                                    self._robot.media.play_sound("wake_up.wav")
+                                except Exception as e:
+                                    logger.warning("Failed to play wake chime: %s", e)
+                        elif state == _WakeWordState.ACTIVE:
+                            keyword_index = porcupine_stop.process(chunk)
+                            if keyword_index >= 0:
+                                logger.info("Stop word 'Reachy Stop' detected! Switching to WAITING")
+                                state = _WakeWordState.WAITING
+                                try:
+                                    self._robot.media.play_sound("go_sleep.wav")
+                                except Exception as e:
+                                    logger.warning("Failed to play sleep chime: %s", e)
+                                try:
+                                    await self.handler._restart_session()
+                                except Exception as e:
+                                    logger.warning("Failed to restart session: %s", e)
+
+                if state == _WakeWordState.ACTIVE:
+                    await self.handler.receive((input_sample_rate, audio_frame))
+                else:
+                    # Suppress idle detection while waiting for wake word
+                    self.handler.last_activity_time = asyncio.get_event_loop().time()
+
+                await asyncio.sleep(0)
+        finally:
+            if wake_word_enabled:
+                try:
+                    porcupine_hi.delete()
+                    porcupine_stop.delete()
+                except Exception:
+                    pass
 
     async def play_loop(self) -> None:
         """Fetch outputs from the handler: log text and play audio frames."""

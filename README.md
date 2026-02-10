@@ -119,6 +119,23 @@ Some wheels (e.g. PyTorch) are large and require compatible CUDA or CPU builds�
 | `HF_HOME` | Cache directory for local Hugging Face downloads (only used with `--local-vision` flag, defaults to `./cache`).
 | `HF_TOKEN` | Optional token for Hugging Face models (only used with `--local-vision` flag, falls back to `huggingface-cli login`).
 | `LOCAL_VISION_MODEL` | Hugging Face model path for local vision processing (only used with `--local-vision` flag, defaults to `HuggingFaceTB/SmolVLM2-2.2B-Instruct`).
+| `PORCUPINE_SECRET_KEY_HI` | Picovoice access key for the "Hey Reachy" wake word. Optional — if unset, wake word gating is disabled and the robot listens continuously. |
+| `PORCUPINE_SECRET_KEY_STOP` | Picovoice access key for the "Reachy Stop" keyword. Optional — required together with `PORCUPINE_SECRET_KEY_HI` to enable wake word. |
+
+### Wake word detection (optional)
+
+The app supports wake word gating via [Picovoice Porcupine](https://picovoice.ai/). When enabled, the robot only forwards mic audio to OpenAI after hearing **"Hey Reachy"**, and stops listening when it hears **"Reachy Stop"**.
+
+1. Get two Picovoice access keys from the [Picovoice Console](https://console.picovoice.ai/) (free tier allows one key per model).
+2. Train custom wake word models for "Hey Reachy" and "Reachy Stop" in the console and download the `.ppn` files.
+3. Place the `.ppn` files in `src/reachy_mini_conversation_app/assets/` as `hey_reachy.ppn` and `reachy_stop.ppn`.
+4. Set the env vars in your `.env`:
+   ```
+   PORCUPINE_SECRET_KEY_HI=your-key-for-hey-reachy
+   PORCUPINE_SECRET_KEY_STOP=your-key-for-reachy-stop
+   ```
+
+If either key is missing, the app behaves as before (always listening, no wake word).
 
 ## Running the app
 

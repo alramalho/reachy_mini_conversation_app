@@ -30,6 +30,7 @@ dependencies = [
     "reachy-mini >= 1.2.11",
     "eclipse-zenoh~=1.7.0",
     "gradio_client>=1.13.3",
+    "pvporcupine",
 ]
 
 [project.optional-dependencies]
@@ -84,6 +85,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 reachy_mini_conversation_app = [
+  "assets/*",
   "images/*",
   "static/*",
   ".env.example",
